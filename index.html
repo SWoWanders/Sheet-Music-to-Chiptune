@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Chiptune OMR Engine v0.6</title>
+    <style>
+        :root { --neon: #00ff41; --bg: #0a0a0a; }
+        body { font-family: 'Courier New', monospace; background: var(--bg); color: var(--neon); padding: 20px; display: flex; flex-direction: column; align-items: center; }
+        .terminal { width: 95%; max-width: 850px; border: 2px solid var(--neon); padding: 20px; background: #000; box-shadow: 0 0 20px rgba(0,255,65,0.3); }
+        h1 { text-align: center; border-bottom: 2px solid var(--neon); padding-bottom: 10px; text-shadow: 0 0 8px var(--neon); }
+        textarea { width: 100%; height: 220px; background: #000; color: var(--neon); border: 1px solid var(--neon); padding: 10px; font-family: inherit; margin: 15px 0; outline: none; resize: none; }
+        .controls { display: flex; gap: 15px; justify-content: center; flex-wrap: wrap; margin-bottom: 20px; }
+        button { background: var(--neon); color: #000; border: none; padding: 12px 24px; font-weight: bold; cursor: pointer; text-transform: uppercase; transition: 0.2s; }
+        button:hover { background: #fff; box-shadow: 0 0 10px #fff; }
+        #stop-btn { background: #ff3333; color: white; }
+        #download-link { color: #fff; text-decoration: underline; display: none; margin-top: 10px; text-align: center; }
+        .status { font-size: 0.85em; text-align: center; color: #888; border-top: 1px solid #333; padding-top: 10px; }
+    </style>
+</head>
+<body>
+
+<div class="terminal">
+    <h1>CHIPTUNE_SYSTEM_v0.6</h1>
+    
+    <label>[INPUT]: ABC_NOTATION_DATA</label>
+    <textarea id="abc-input">X:1
+T:Happy Birthday
+M:3/4
+L:1/4
+K:C
+[V:1] z2 G/2G/2 | A G c | B2 G/2G/2 | A G d | c2 G/2G/2 | g e c | B A f/2f/2 | e c d | c3 |]
+[V:2] Z | [C,E,G,]3 | [B,,D,G,]3 | [B,,D,G,]3 | [C,E,G,]3 | [C,E,G,]3 | [C,F,A,] z2 | [C,E,G,] z [B,,D,G,] | [C,E,G,]3 |]</textarea>
+
+    <div class="controls">
+        <button onclick="playAndRecord()">▶ PLAY & RECORD</button>
+        <button id="stop-btn" onclick="stopAll()">■ STOP</button>
+    </div>
+    
+    <div id="download-zone" style="text-align: center;">
+        <a id="download-link">DOWNLOAD_CHIPTUNE_FILE (.webm)</a>
+    </div>
+
+    <div class="status" id="status-msg">SYSTEM_READY // WAITING_FOR_COMMAND</div>
+</div>
+
+<script>
+    const noteFrequencies = {
+        "z": 0, "Z": 0,
+        "C,,": 65.41, "D,,": 73.42, "E,,": 82.41, "F,,": 87.31, "G,,": 98.00, "A,,": 110.00, "B,,": 123.47,
+        "C,": 130.81, "D,": 146.83, "E,": 164.81, "F,": 174.61, "G,": 196.00, "A,": 220.00, "B,": 246.94,
+        "C": 261.63, "D": 293.66, "E": 329.63, "F": 349.23, "G": 392.00, "A": 440.00, "B": 493.88,
+        "c": 523.25, "d": 587.33, "e": 659.25, "f": 698.46, "g": 783.99
+    };
+
+    let audioCtx = null;
+    let activeSources = [];
+    let recorder = null;
+    let audioChunks = [];
+
+    function stopAll() {
+        activeSources.forEach(s => { try { s.stop(); } catch(e) {} });
+        activeSources = [];
+        if (recorder && recorder.state === "recording") recorder.stop();
+        document.getElementById('status-msg').innerText = "PROCESS_TERMINATED";
+    }
+
+    async function playAndRecord() {
+        if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        stopAll();
+        audioChunks = [];
+        
+        const status = document.getElementById('status-msg');
+        status.innerText = "RECORDING_IN_PROGRESS...";
+
+        // Create a destination for the recording
+        const dest = audioCtx.createMediaStreamDestination();
+        recorder = new MediaRecorder(dest.stream);
+        
+        recorder.ondataavailable = e => audioChunks.push(e.data);
+        recorder.onstop = () => {
+            const blob = new Blob(audioChunks, { type: 'audio/webm' });
+            const url = URL.createObjectURL(blob);
+            const link = document.getElementById('download-link');
+            link.href = url;
+            link.download = 'chiptune_export.webm';
+            link.style.display = 'block';
+            status.innerText = "EXPORT_COMPLETE // READY_FOR_DOWNLOAD";
+        };
+
+        const rawText = document.getElementById('abc-input').value;
+        const baseTempo = 0.5;
+        const v1Data = extractVoice(rawText, '[V:1]');
+        const v2Data = extractVoice(raw
