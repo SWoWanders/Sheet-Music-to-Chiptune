@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Chiptune System v2.8 - Final Fix</title>
+    <style>
+        :root { --neon: #00ff41; --bg: #0a0a0a; --dim: #004411; --err: #ff3333; }
+        body { font-family: 'Courier New', monospace; background: var(--bg); color: var(--neon); padding: 10px; display: flex; flex-direction: column; align-items: center; margin: 0; }
+        .terminal { width: 98%; max-width: 900px; border: 2px solid var(--neon); padding: 15px; background: #000; box-sizing: border-box; }
+        .grid { display: grid; grid-template-columns: 1fr; gap: 15px; margin-bottom: 15px; }
+        @media (min-width: 600px) { .grid { grid-template-columns: 1fr 1fr; } }
+        .panel { border: 1px solid var(--dim); padding: 12px; background: #050505; }
+        input, textarea { background: #000; border: 1px solid var(--neon); color: var(--neon); padding: 8px; font-family: inherit; width: 100%; box-sizing: border-box; font-size: 14px; }
+        
+        .progress-container { width: 100%; height: 14px; background: #111; border: 1px solid var(--dim); margin: 15px 0; overflow: hidden; }
+        #progress-bar { width: 0%; height: 100%; background: var(--neon); transition: width 0.3s ease; }
+        .pulse { animation: pulse-anim 1.5s infinite linear; background: linear-gradient(90deg, var(--neon), var(--dim), var(--neon)); background-size: 200% 100%; }
+        @keyframes pulse-anim { 0% { background-position: 200% 0; } 100% { background-position: 0 0; } }
+
+        #console-monitor { width: 100%; height: 100px; background: #001100; border: 1px solid var(--dim); color: #00ff00; font-size: 10px; overflow-y: auto; padding: 5px; margin-top: 10px; white-space: pre-wrap; border-left: 3px solid var(--neon); }
+        button { background: var(--neon); color: #000; border: none; padding: 12px; font-weight: bold; cursor: pointer; text-transform: uppercase; width: 100%; margin-top: 5px; }
+        canvas { width: 100%; height: 80px; background: #000; border: 1px solid var(--dim); margin-top: 10px; }
+    </style>
+</head>
+<body>
+
+<div class="terminal">
+    <h2 style="text-align:center; margin: 0 0 15px 0; font-size: 1.2em;">CHIPTUNE_CORE_v2.8</h2>
+    <div class="grid">
+        <div class="panel">
+            <label style="font-size:0.7em;">1. AUTH & UPLOAD</label>
+            <input type="password" id="api-key" placeholder="Paste Gemini Key...">
+            <input type="file" id="file-input" accept="image/*" style="margin-top:10px;">
+            <button onclick="analyzeWithPrecision()">RUN_ANALYSIS</button>
+            <div class="progress-container"><div id="progress-bar"></div></div>
+        </div>
+        <div class="panel">
+            <label style="font-size:0.7em;">2. MODULATION</label>
+            <div style="font-size:0.7em;">TEMPO: <input type="range" id="tempo-scale" min="0.2" max="3.0" step="0.1" value="1.0"></div>
+            <div style="font-size:0.7em; margin-top:8px;">PITCH: <input type="range" id="pitch-scale" min="0.5" max="2.0" step="0.1" value="1.0"></div>
+            <div style="font-size:0.7em; margin-top:8px;">VIBRATO: <input type="range" id="vibrato-depth" min="0" max="20" step="1" value="0"></div>
+        </div>
+    </div>
+
+    <label style="font-size:0.7em;">3. DIAGNOSTIC_LOG</label>
+    <div id="console-monitor">SYSTEM_IDLE...</div>
+    <canvas id="visualizer"></canvas>
+    <textarea id="abc-input" rows="5" placeholder="ABC buffer..."></textarea>
+
+    <div style="display:flex; gap:10px; margin-top:15px;">
+        <button onclick="playAndRecord()" style="flex:2;">▶ PLAY & RECORD</button>
+        <button onclick="stopAll()" style="background:var(--err); color:white; flex:1;">■ STOP</button>
+    </div>
+    <a id="download-link" style="display:none; color:white; text-align:center; margin-top:10px; font-size:0.8em;"></a>
+</div>
+
+<script>
+    const noteMap = { "C": 261.63, "^C": 277.18, "_D": 277.18, "D": 293.66, "^D": 311.13, "_E": 311.13, "E": 329.63, "F": 349.23, "^F": 369.99, "_G": 369.99, "G": 392.00, "^G": 415.30, "_A": 415.30, "A": 440.00, "^A": 466.16, "_B": 466.16, "B": 493.88, "z": 0 };
+    let audioCtx = null, activeSources = [], recorder = null, audioChunks = [], analyzer = null;
+
+    function sysLog(msg, isError = false) {
+        const mon = document.getElementById('console-monitor');
+        mon.innerHTML += `\n[${new Date().toLocaleTimeString().split(' ')[0]}] ${isError ? '!! ' : ''}${msg}`;
+        mon.scrollTop = mon.scrollHeight;
+    }
+
+    async function analyzeWithPrecision() {
+        const bar = document.getElementById('progress-bar');
+        const key = document.getElementById('api-key').value.trim();
+        const file = document.getElementById('file-input').files[0];
+
+        bar.style.width = "15%"; 
+        bar.style.backgroundColor = "var(--neon)";
+        bar.classList.add('pulse');
+        sysLog("Connecting to gemini-1.5-flash-latest...");
+
+        if(!key || !file) { sysLog("Missing credentials.", true); bar.classList.remove('pulse'); return; }
+
+        const reader = new FileReader();
+        reader.readAsDataURL(file);
+        reader.onload = async () => {
+            sysLog("Image encoded. Dispatching request...");
+            bar.style.width = "45%";
+            try {
+                const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key=${key}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ contents: [{ parts: [
+                        { text: "Transcribe this sheet music to ABC notation. Identify [V:1] and [V:2]. Chords like [CEG]." },
+                        { inline_data: { mime_type: file.type, data: reader.result.split(',')[1] } }
+                    ]}] })
+                });
+                const data = await response.json();
+                if (data.error) throw new Error(`${data.error.code}: ${data.error.message}`);
+                if (data.candidates) {
+                    document.getElementById('abc-input').value = data.candidates[0].content.parts[0].text.replace(/```abc|```/g, '').trim();
+                    bar.style.width = "100%";
+                    sysLog("Signal synchronized. ABC buffer updated.");
+                }
+            } catch (e) { sysLog(e.message, true); bar.style.backgroundColor = "var(--err)"; }
+            finally { bar.classList.remove('pulse'); }
+        };
+    }
+
+    function scheduleNote(f, t, d, type, vol, dest, pitch, v) {
+        const osc = audioCtx.createOscillator(), g = audioCtx.createGain();
+        osc.type = type; osc.frequency.setValueAtTime(f * pitch, t);
+        if (v > 0) {
+            const lfo = audioCtx.createOscillator(), lg = audioCtx.createGain();
+            lfo.frequency.setValueAtTime(6, t); lg.gain.setValueAtTime(v, t);
+            lfo.connect(lg); lg.connect(osc.frequency);
+            lfo.start(t); lfo.stop(t + d); activeSources.push(lfo);
+        }
+        g.gain.setValueAtTime(0, t);
+        g.gain.linearRampToValueAtTime(vol, t + 0.02);
+        g.gain.exponentialRampToValueAtTime(vol * 0.7, t + 0.1);
+        g.gain.setValueAtTime(vol * 0.7, t + d - 0.05);
+        g.gain.linearRampToValueAtTime(0, t + d);
+        osc.connect(g).connect(audioCtx.destination);
+        g.connect(analyzer); g.connect(dest);
+        osc.start(t); osc.stop(t + d); activeSources.push(osc);
+    }
+
+    function playStream(notes, start, tempo, type, vol, dest, pitch, v) {
+        let head = start;
+        notes.forEach(s => {
+            let seg = s.replace(/![a-z]+!/g, '').replace(/\|/g, '');
+            if (!seg) return;
+            let nts = seg.startsWith('[') ? (seg.slice(1, -1).match(/([\^\\_]*[a-gA-G,zZ]+[']*[\d\/]*)/g) || []) : [seg];
+            let md = 0;
+            nts.forEach(ns => {
+                let m = ns.match(/^([\^\\_]*)([a-gA-G,zZ]+)([']*)([\d\/]*)$/);
+                if (!m) return;
+                let f = noteMap[m[1] + m[2].toUpperCase().replace(/[,]/g, '')] || noteMap[m[2].toUpperCase().replace(/[,]/g, '')];
+                if (f !== undefined) {
+                    if (m[2].toLowerCase() === m[2]) f *= 2;
+                    if (m[2].includes(',')) f /= 2;
+                    if (m[3]) f *= Math.pow(2, m[3].length);
+                    let df = m[4].includes('/') ? 0.5 : (parseFloat(m[4]) || 1);
+                    if (df > md) md = df;
+                    scheduleNote(f, head, tempo * df, type, vol, dest, pitch, v);
+                }
+            });
+            head += (tempo * (md || 1));
+        });
+        return head - start;
+    }
+
+    async function playAndRecord() {
+        if (!audioCtx) audioCtx = new AudioContext();
+        stopAll(); analyzer = audioCtx.createAnalyser(); draw();
+        const t = 0.5 / parseFloat(document.getElementById('tempo-scale').value);
+        const p = parseFloat(document.getElementById('pitch-scale').value);
+        const v = parseFloat(document.getElementById('vibrato-depth').value);
+        const dest = audioCtx.createMediaStreamDestination();
+        recorder = new MediaRecorder(dest.stream); audioChunks = [];
+        recorder.ondataavailable = e => audioChunks.push(e.data);
+        recorder.onstop = () => {
+            const link = document.getElementById('download-link');
+            link.href = URL.createObjectURL(new Blob(audioChunks, { type: 'audio/webm' }));
+            link.innerText = "SAVE_CHIPTUNE_" + Date.now(); link.style.display = 'block';
+        };
+        const raw = document.getElementById('abc-input').value;
+        const v1 = [], v2 = [];
+        raw.split('\n').forEach(l => {
+            if (l.includes('[V:1]')) v1.push(...l.split('[V:1]')[1].trim().split(/\s+/));
+            if (l.includes('[V:2]')) v2.push(...l.split('[V:2]')[1].trim().split(/\s+/));
+        });
+        recorder.start();
+        const d1 = playStream(v1, audioCtx.currentTime + 0.1, t, 'square', 0.1, dest, p, v);
+        const d2 = playStream(v2, audioCtx.currentTime + 0.1, t, 'triangle', 0.15, dest, p, v);
+        setTimeout(() => { if(recorder.state==="recording") recorder.stop(); }, (Math.max(d1, d2) * 1000) + 1000);
+    }
+
+    function draw() {
+        if (!analyzer) return; requestAnimationFrame(draw);
+        const c = document.getElementById('visualizer'), ctx = c.getContext('2d');
+        const d = new Uint8Array(analyzer.frequencyBinCount);
+        analyzer.getByteTimeDomainData(d);
+        ctx.fillStyle = 'black'; ctx.fillRect(0, 0, c.width, c.height);
+        ctx.lineWidth = 2; ctx.strokeStyle = '#00ff41'; ctx.beginPath();
+        let x = 0, sl = c.width / d.length;
+        for (let i = 0; i < d.length; i++) {
+            let y = (d[i] / 128.0) * c.height / 2;
+            if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+            x += sl;
+        }
+        ctx.stroke();
+    }
+
+    function stopAll() { activeSources.forEach(s => { try{s.stop()}catch(e){} }); activeSources = []; if(recorder?.state==="recording") recorder.stop(); }
+</script>
+</body>
+</html>
