@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Chiptune Workbench: Step 4</title>
+    <style>
+        body { font-family: 'Courier New', monospace; background: #121212; color: #00ff41; padding: 30px; line-height: 1.6; }
+        .container { max-width: 800px; margin: auto; border: 2px solid #00ff41; padding: 20px; box-shadow: 0 0 15px #00ff41; }
+        h1 { text-align: center; text-transform: uppercase; letter-spacing: 5px; border-bottom: 1px solid #00ff41; padding-bottom: 10px; }
+        textarea { width: 100%; height: 180px; background: #000; color: #00ff41; border: 1px solid #00ff41; padding: 10px; font-family: inherit; box-sizing: border-box; margin-bottom: 20px; }
+        .btn-group { display: flex; gap: 10px; justify-content: center; }
+        button { background: #00ff41; color: #000; border: none; padding: 15px 25px; font-weight: bold; cursor: pointer; text-transform: uppercase; transition: 0.2s; }
+        button:hover { background: #fff; box-shadow: 0 0 10px #fff; }
+        button:disabled { background: #333; color: #666; cursor: not-allowed; }
+        .note { font-size: 0.8em; color: #888; text-align: center; margin-top: 10px; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h1>Chiptune Engine v0.4</h1>
+    
+    <p>Paste AI-Generated ABC Notation Below:</p>
+    <textarea id="abc-input">X:1
+T:Happy Birthday
+M:3/4
+L:1/4
+K:C
+[V:1] z2 G/2G/2 | A G c | B2 G/2G/2 | A G d | c2 G/2G/2 | g e c | B A f/2f/2 | e c d | c3 |]</textarea>
+
+    <div class="btn-group">
+        <button onclick="playFullMelody()">Play Melody (V:1)</button>
+        <button onclick="stopAll()">Stop</button>
+    </div>
+    
+    <p class="note">Next Step: Adding the 'Bass' channel and MP3 Export.</p>
+</div>
+
+<script>
+    // 1. EXTENDED DICTIONARY (Supports high and low octaves)
+    const noteFrequencies = {
+        "z": 0,      // Rest
+        "G,": 196.00, "A,": 220.00, "B,": 246.94, // Lower Octave
+        "C": 261.63, "D": 293.66, "E": 329.63, "F": 349.23, "G": 392.00, "A": 440.00, "B": 493.88, // Middle
+        "c": 523.25, "d": 587.33, "e": 659.25, "f": 698.46, "g": 783.99, "a": 880.00, "b": 987.77  // Higher
+    };
+
+    let audioCtx = null;
+    let activeOscillators = [];
+
+    function stopAll() {
+        activeOscillators.forEach(osc => osc.stop());
+        activeOscillators = [];
+    }
+
+    async function playFullMelody() {
+        if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        stopAll();
+
+        const rawText = document.getElementById('abc-input').value;
+        
+        // Find the melody section [V:1] and clean up pipes/brackets
+        let melodyData = rawText.split('[V:1]')[1] || rawText;
+        melodyData = melodyData.split('|').join(' ').replace(/[\[\]]/g, '').trim();
+        
+        const symbols = melodyData.split(/\s+/);
+        let currentTime = audioCtx.currentTime + 0.1;
+        const baseTempo = 0.5; // Seconds per quarter note
+
+        symbols.forEach(symbol => {
+            // Check for rhythm modifiers (e.g., G/2 or B2)
+            let duration = baseTempo;
+            let noteName = symbol;
+
+            if (symbol.includes('/2')) {
+                duration = baseTempo / 2;
+                noteName = symbol.replace('/2', '');
+            } else if (symbol.includes('2')) {
+                duration = baseTempo * 2;
+                noteName = symbol.replace('2', '');
+            } else if (symbol.includes('3')) {
+                duration = baseTempo * 3;
+                noteName = symbol.replace('3', '');
+            }
+
+            if (noteFrequencies[noteName] !== undefined) {
+                scheduleNote(noteFrequencies[noteName], currentTime, duration);
+            }
+            
+            currentTime += duration;
+        });
+    }
+
+    function scheduleNote(freq, startTime, duration) {
+        if (freq === 0) return; // Skip rests
+
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+
+        osc.type = 'square'; // Classic 8-bit sound
+        osc.frequency.setValueAtTime(freq, startTime);
+
+        osc.connect(gain);
+        gain.connect(audioCtx.destination);
+
+        // Chiptune Envelope: Instant on, quick decay
+        gain.gain.setValueAtTime(0, startTime);
+        gain.gain.linearRampToValueAtTime(0.1, startTime + 0.01);
+        gain.gain.exponentialRampToValueAtTime(0.0001, startTime + duration - 0.05);
+
+        osc.start(startTime);
+        osc.stop(startTime + duration);
+        activeOscillators.push(osc);
+    }
+</script>
+
+</body>
+</html>
