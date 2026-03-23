@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Chiptune Step 3: The Workbench</title>
+    <style>
+        body { font-family: monospace; background: #222; color: #00ff41; padding: 20px; }
+        textarea { width: 100%; height: 150px; background: #000; color: #00ff41; border: 1px solid #00ff41; margin-bottom: 10px; }
+        button { background: #00ff41; color: #000; padding: 10px 20px; cursor: pointer; border: none; font-weight: bold; }
+        .controls { margin-top: 20px; border-top: 1px solid #444; padding-top: 20px; }
+    </style>
+</head>
+<body>
+
+    <h1>CHIPTUNE WORKBENCH v1.0</h1>
+    
+    <label>Paste your AI-generated ABC Notation here:</label>
+    <textarea id="abc-input">X:1
+T:Happy Birthday
+M:3/4
+L:1/4
+K:C
+C C D C F E</textarea>
+
+    <div class="controls">
+        <button onclick="playTestNote('C')">Test C Note</button>
+        <button onclick="playTestNote('G')">Test G Note</button>
+        <button id="play-full" disabled>Play Full Melody (Coming in Step 4)</button>
+    </div>
+
+    <script>
+        // OUR DICTIONARY (The translation table)
+        const noteFrequencies = {
+            "C": 261.63, "D": 293.66, "E": 329.63, 
+            "F": 349.23, "G": 392.00, "A": 440.00, "B": 493.88
+        };
+
+        let audioCtx = null;
+
+        function playTestNote(noteName) {
+            // 1. Start the Audio Engine
+            if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+
+            // 2. Look up the frequency
+            const freq = noteFrequencies[noteName];
+
+            // 3. Create the 8-bit Sound
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+
+            osc.type = 'square'; // THE CHIPTUNE SECRET
+            osc.frequency.setValueAtTime(freq, audioCtx.currentTime);
+
+            // 4. Connect and Play
+            osc.connect(gain);
+            gain.connect(audioCtx.destination);
+            
+            osc.start();
+            
+            // Fade out quickly so it sounds like a "blip"
+            gain.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + 0.5);
+            osc.stop(audioCtx.currentTime + 0.5);
+        }
+    </script>
+</body>
+</html>
