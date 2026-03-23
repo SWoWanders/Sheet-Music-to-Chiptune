@@ -1,0 +1,45 @@
+<button id="play">1. Play 8-Bit Note</button>
+<button id="download" disabled>2. Download MP3/WebM</button>
+
+<script>
+  let audioCtx;
+  let recorder;
+  let chunks = [];
+
+  document.getElementById('play').onclick = () => {
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    const dest = audioCtx.createMediaStreamDestination();
+    
+    // Create the "Chiptune" Sound (Square Wave)
+    const osc = audioCtx.createOscillator();
+    osc.type = 'square'; // This is the secret to the 8-bit sound
+    osc.frequency.setValueAtTime(440, audioCtx.currentTime); // Note A4
+
+    // Route to speakers AND the recorder
+    osc.connect(audioCtx.destination);
+    osc.connect(dest);
+
+    // Setup Recording
+    recorder = new MediaRecorder(dest.stream);
+    recorder.ondataavailable = e => chunks.push(e.data);
+    recorder.onstop = () => {
+      const blob = new Blob(chunks, { type: 'audio/webm' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'chiptune-test.webm';
+      a.innerText = 'Click to Save File';
+      document.body.appendChild(a);
+    };
+
+    recorder.start();
+    osc.start();
+    
+    // Stop after 1 second
+    setTimeout(() => {
+      osc.stop();
+      recorder.stop();
+      document.getElementById('download').disabled = false;
+    }, 1000);
+  };
+</script>
