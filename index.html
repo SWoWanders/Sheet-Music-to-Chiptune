@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Chiptune System v2.3</title>
+    <style>
+        :root { --neon: #00ff41; --bg: #0a0a0a; --dim: #004411; --err: #ff3333; }
+        body { font-family: 'Courier New', monospace; background: var(--bg); color: var(--neon); padding: 20px; display: flex; flex-direction: column; align-items: center; }
+        .terminal { width: 95%; max-width: 900px; border: 2px solid var(--neon); padding: 20px; background: #000; box-shadow: 0 0 20px rgba(0,255,65,0.3); }
+        h1 { text-align: center; border-bottom: 2px solid var(--neon); padding-bottom: 10px; text-shadow: 0 0 8px var(--neon); margin-top: 0; }
+        .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 20px; }
+        .panel { border: 1px solid var(--dim); padding: 15px; background: #050505; }
+        input, textarea { background: #000; border: 1px solid var(--neon); color: var(--neon); padding: 8px; font-family: inherit; width: 100%; box-sizing: border-box; }
+        label { font-size: 0.7em; color: #888; text-transform: uppercase; margin-bottom: 5px; display: block; }
+        
+        /* Progress Bar Styles */
+        .progress-container { width: 100%; height: 10px; background: #111; border: 1px solid var(--dim); margin-top: 10px; overflow: hidden; position: relative; }
+        #progress-bar { width: 0%; height: 100%; background: var(--neon); transition: width 0.3s; }
+        .pulse { animation: pulse-loading 2s infinite linear; background-image: linear-gradient(90deg, var(--neon) 0%, var(--dim) 50%, var(--neon) 100%); background-size: 200% 100%; }
+        @keyframes pulse-loading { 0% { background-position: 200% 0; } 100% { background-position: 0 0; } }
+
+        canvas { width: 100%; height: 100px; background: #000; border: 1px solid var(--dim); margin: 10px 0; }
+        .slider-group { margin: 10px 0; }
+        .slider-group div { display: flex; justify-content: space-between; font-size: 0.7em; margin-bottom: 3px; }
+        
+        /* Control Buttons */
+        .btn-row { display: flex; gap: 10px; margin-top: 15px; }
+        button { background: var(--neon); color: #000; border: none; padding: 12px; font-weight: bold; cursor: pointer; text-transform: uppercase; width: 100%; transition: 0.2s; }
+        button:hover { background: #fff; box-shadow: 0 0 10px #fff; }
+        #stop-btn { background: var(--err); color: white; flex: 1; }
+        #play-btn { flex: 2; }
+        
+        #download-link { display: none; color: #fff; text-align: center; font-weight: bold; padding: 12px; border: 1px solid #fff; margin-top: 10px; text-decoration: none; font-size: 0.8em; }
+        .status { font-size: 0.7em; text-align: center; margin-top: 10px; color: var(--neon); letter-spacing: 1px; }
+    </style>
+</head>
+<body>
+
+<div class="terminal">
+    <h1>CHIPTUNE_CORE_v2.3</h1>
+    <div class="grid">
+        <div class="panel">
+            <label>1. AUTH & SOURCE</label>
+            <input type="text" id="api-key" placeholder="Gemini API Key...">
+            <input type="file" id="file-input" style="margin-top:10px;">
+            <button onclick="analyzeWithPrecision()">RUN_ANALYSIS</button>
+            <div class="progress-container">
+                <div id="progress-bar"></div>
+            </div>
+        </div>
+        <div class="panel">
+            <label>2. MODULATION_RACK</label>
+            <div class="slider-group">
+                <div><span>TEMPO</span><span id="t-val">1.0x</span></div>
+                <input type="range" id="tempo-scale" min="0.2" max="3.0" step="0.1" value="1.0" oninput="document.getElementById('t-val').innerText=this.value+'x'">
+            </div>
+            <div class="slider-group">
+                <div><span>PITCH</span><span id="p-val">1.0x</span></div>
+                <input type="range" id="pitch-scale" min="0.5" max="2.0" step="0.1" value="1.0" oninput="document.getElementById('p-val').innerText=this.value+'x'">
+            </div>
+            <div class="slider-group">
+                <div><span>VIBRATO</span><span id="v-val">0</span></div>
+                <input type="range" id="vibrato-depth" min="0" max="20" step="1" value="0" oninput="document.getElementById('v-val').innerText=this.value">
+            </div>
+        </div>
+    </div>
+
+    <label>3. SIGNAL_ANALYZER & DATA_BUFFER</label>
+    <canvas id="visualizer"></canvas>
+    <textarea id="abc-input" rows="8" placeholder="ABC notation buffer..."></textarea>
+
+    <div class="btn-row">
+        <button id="play-btn" onclick="playAndRecord()">▶ PLAY & RECORD</button>
+        <button id="stop-btn" onclick="stopAll()">■ STOP</button>
+    </div>
+    
+    <a id="download-link">DOWNLOAD_MASTER_RENDER</a>
+    <div class="status" id="status-msg">SYSTEM_READY</div>
+</div>
+
+<script>
+    const noteMap = { "C": 261.63, "^C": 277.18, "_D": 277.18, "D": 293.66, "^D": 311.13, "_E": 311.13, "E": 329.63, "F": 349.23, "^F": 369.99, "_G": 369.99, "G": 392.00, "^G": 415.30, "_A": 415.30, "A": 440.00, "^A": 466.16, "_B": 466.16, "B": 493.88, "z": 0 };
+    let audioCtx = null, activeSources = [], recorder = null, audioChunks = [], analyzer = null;
+
+    function updateProgress(percent, isLoading) {
+        const bar = document.getElementById('progress-bar');
+        bar.style.width = percent + "%";
+        if (isLoading) bar.classList.add('pulse');
+        else bar.classList.remove('pulse');
+    }
+
+    async function analyzeWithPrecision() {
+        const key = document.getElementById('api-key').value;
+        const file = document.getElementById('file-input').files[0];
+        if(!key || !file) return alert("Missing API Key or File.");
+        
+        document.getElementById('status-msg').innerText = "SIGNAL_PROCESSING...";
+        updateProgress(50, true);
+
+        const reader = new FileReader();
+        reader.readAsDataURL(file);
+        reader.onload = async () => {
+            const base64 = reader.result.split(',')[1];
+            try {
+                const response = await fetch(`https://generativelanguage.googleapis.com/v1/models/gemini-2.0-flash:generateContent?key=${key}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ contents: [{ parts: [
+                        { text: "Transcribe this sheet music to ABC notation. Handle voices [V:1] and [V:2] and chords [CEG]." },
+                        { inline_data: { mime_type: file.type, data: base64 } }
+                    ] }] })
+                });
+                const data = await response.json();
+                if(data.candidates) {
+                    document.getElementById('abc-input').value = data.candidates[0].content.parts[0].text.replace(/```abc|```/g, '').trim();
+                    document.getElementById('status-msg').innerText = "SUCCESS: SIGNAL_STABLE";
+                    updateProgress(100, false);
+                } else { throw new Error("Invalid API response"); }
+            } catch (e) { 
+                document.getElementById('status-msg').innerText = "FAIL: " + e.message;
+                updateProgress(100, false);
+                document.getElementById('progress-bar').style.backgroundColor = "var(--err)";
+            }
+        };
+    }
+
+    // --- Audio Logic (ADSR, Vibrato, Polyphony) ---
+    function draw() {
+        if (!analyzer) return;
+        requestAnimationFrame(draw);
+        const canvas = document.getElementById('visualizer');
+        const ctx = canvas.getContext('2d');
+        const dataArray = new Uint8Array(analyzer.frequencyBinCount);
+        analyzer.getByteTimeDomainData(dataArray);
+        ctx.fillStyle = 'black'; ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.lineWidth = 2; ctx.strokeStyle = '#00ff41';
+        ctx.beginPath();
+        let x = 0, slice = canvas.width / dataArray.length;
+        for (let i = 0; i < dataArray.length; i++) {
+            let v = dataArray[i] / 128.0, y = v * canvas.height / 2;
+            if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+            x += slice;
+        }
+        ctx.stroke();
+    }
+
+    function scheduleNote(freq, time, dur, type, vol, dest, pitchScale, vDepth) {
+        const osc = audioCtx.createOscillator(), gain = audioCtx.createGain();
+        const lfo = audioCtx.createOscillator(), lfoGain = audioCtx.createGain();
+        osc.type = type; osc.frequency.setValueAtTime(freq * pitchScale, time);
+        if (vDepth > 0) {
+            lfo.frequency.setValueAtTime(6, time);
+            lfoGain.gain.setValueAtTime(vDepth, time);
+            lfo.connect(lfoGain); l
