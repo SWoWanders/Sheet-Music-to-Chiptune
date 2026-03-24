@@ -1,0 +1,686 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PolyChip Maestro</title>
+    <style>
+        :root { 
+            --neon: #00ff41; --bg: #0a0a0a; --dim: #004411; --err: #ff3333; 
+            --accent: #0088ff; --warm: #ffaa00; --white-key: #e0e0e0; --black-key: #333;
+            --playhead: #ff0044; --grid: #1a331a; --active-note: #00ffff;
+        }
+        body { 
+            font-family: 'Courier New', monospace; background: var(--bg); color: var(--neon); 
+            padding: 10px; display: flex; flex-direction: column; align-items: center; margin: 0;
+            touch-action: manipulation;
+        }
+        .terminal { 
+            width: 98%; max-width: 1200px; border: 2px solid var(--neon); padding: 15px; 
+            background: #000; box-sizing: border-box;
+        }
+        .grid { display: grid; grid-template-columns: 1fr; gap: 15px; margin-bottom: 15px; }
+        @media (min-width: 900px) { .grid { grid-template-columns: 1fr 1fr 1.2fr; } }
+        .panel { border: 1px solid var(--dim); padding: 12px; background: #050505; }
+        input, select, textarea { 
+            background: #000; border: 1px solid var(--neon); color: var(--neon); 
+            padding: 8px; font-family: inherit; width: 100%; box-sizing: border-box; margin-bottom: 10px;
+            font-size: 16px;
+        }
+        #console-monitor { 
+            width: 100%; height: 180px; background: #001100; border: 1px solid var(--dim); 
+            color: #00ff00; font-size: 11px; overflow-y: auto; padding: 5px; margin-top: 10px; 
+            border-left: 3px solid var(--neon); font-family: monospace;
+        }
+        button { 
+            background: var(--neon); color: #000; border: none; padding: 15px; 
+            font-weight: bold; cursor: pointer; text-transform: uppercase; width: 100%; 
+            margin-bottom: 5px; font-size: 14px; min-height: 44px;
+        }
+        button:disabled { opacity: 0.5; cursor: not-allowed; }
+        .play-btn { background: #00cc66; }
+        .stop-btn { background: var(--err); color: white; }
+        .demo-btn { background: #333; color: var(--neon); font-size: 0.8em; }
+        .audio-test { 
+            background: #330000; border: 1px solid var(--err); padding: 10px; 
+            margin-bottom: 10px; display: none;
+        }
+        .help-box { 
+            background: #001100; border: 1px solid var(--dim); padding: 10px; 
+            font-size: 0.75em; margin-bottom: 10px;
+        }
+        .help-box a { color: var(--accent); }
+        
+        .piano-roll-container {
+            width: 100%; height: 300px; background: #000; border: 2px solid var(--dim);
+            position: relative; overflow: hidden; margin-bottom: 10px;
+        }
+        .piano-roll-scroll { width: 100%; height: 100%; overflow-x: auto; overflow-y: hidden; }
+        .piano-roll-content { height: 100%; display: flex; }
+        .piano-keys {
+            width: 60px; height: 100%; flex-shrink: 0; background: #111;
+            border-right: 2px solid var(--dim); position: sticky; left: 0; z-index: 10;
+        }
+        .piano-key {
+            height: 20px; border-bottom: 1px solid #333; display: flex;
+            align-items: center; justify-content: flex-end; padding-right: 5px;
+            font-size: 11px; box-sizing: border-box;
+        }
+        .piano-key.white { background: var(--white-key); color: #000; }
+        .piano-key.black { background: var(--black-key); color: #fff; height: 14px; margin-top: -7px; margin-bottom: -7px; z-index: 11; }
+        .piano-key.active { background: var(--active-note) !important; color: #000 !important; }
+        .note-grid { height: 100%; position: relative; }
+        .note-block {
+            position: absolute; background: var(--neon); border: 1px solid #00cc41;
+            border-radius: 3px; opacity: 0.9; min-width: 5px;
+        }
+        .note-block.playing { background: var(--active-note); opacity: 1; box-shadow: 0 0 10px var(--active-note); }
+        .playhead {
+            position: absolute; top: 0; width: 2px; height: 100%;
+            background: var(--playhead); z-index: 20; display: none;
+        }
+        .time-ruler {
+            height: 25px; background: #111; border-bottom: 1px solid var(--dim);
+            margin-left: 60px; position: relative;
+        }
+        .beat-marker {
+            position: absolute; font-size: 10px; color: var(--dim);
+            border-left: 1px solid var(--dim); padding-left: 3px; height: 100%;
+            display: flex; align-items: center;
+        }
+    </style>
+</head>
+<body>
+
+<div class="terminal">
+    <h2 style="text-align:center; margin: 0 0 10px 0; text-shadow: 0 0 5px var(--neon);">PolyChip Maestro</h2>
+    <div style="text-align:center; font-size:0.7em; color:var(--dim); margin-bottom:15px;">AI SHEET MUSIC TRANSCRIBER</div>
+    
+    <div class="audio-test" id="audio-test">
+        🔊 AUDIO LOCKED - Tap "ENABLE AUDIO" to unlock
+        <button onclick="unlockAudio()" style="margin-top:5px;">ENABLE AUDIO</button>
+    </div>
+    
+    <div class="help-box">
+        <strong>AUTO-SETUP:</strong> Enter API key → App automatically picks best model<br>
+        <a href="https://aistudio.google.com/app/apikey" target="_blank">Get free API key</a>
+    </div>
+    
+    <div class="grid">
+        <div class="panel">
+            <label style="font-size:0.7em;">[1. AI TRANSCRIPTION]</label>
+            <input type="password" id="api-key" placeholder="Paste Gemini API Key...">
+            <input type="file" id="file-input" accept="image/*">
+            <button onclick="transcribe()" id="transcribe-btn">TRANSCRIBE IMAGE</button>
+            <button class="demo-btn" onclick="loadDemo()">LOAD DEMO</button>
+            <div style="font-size:0.65em; margin-top:5px;">
+                Model: <span id="model-status">AUTO-SELECT</span>
+            </div>
+        </div>
+        
+        <div class="panel">
+            <label style="font-size:0.7em;">[2. SYNTH]</label>
+            <select id="wave-type">
+                <option value="square">SQUARE (8-bit)</option>
+                <option value="sawtooth">SAWTOOTH</option>
+                <option value="triangle">TRIANGLE</option>
+            </select>
+            <div style="font-size:0.7em;">TEMPO: <input type="range" id="tempo" min="0.5" max="2" step="0.1" value="1"></div>
+            <div style="font-size:0.7em;">VOLUME: <input type="range" id="vol" min="10" max="100" value="90"></div>
+        </div>
+
+        <div class="panel">
+            <label style="font-size:0.7em;">[3. EXPORT]</label>
+            <button onclick="download('abc')">SAVE .ABC</button>
+            <button onclick="download('txt')" class="demo-btn" style="margin-top:5px;">SAVE .TXT</button>
+        </div>
+    </div>
+
+    <div id="console-monitor">SYSTEM READY - Enter API key to begin</div>
+    
+    <div class="piano-roll-container">
+        <div class="time-ruler" id="time-ruler"></div>
+        <div class="piano-roll-scroll" id="piano-scroll">
+            <div class="piano-roll-content">
+                <div class="piano-keys" id="piano-keys"></div>
+                <div class="note-grid" id="note-grid">
+                    <div class="playhead" id="playhead"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <textarea id="abc-input" rows="6" placeholder="ABC notation will appear here..."></textarea>
+
+    <div style="display:flex; gap:10px; margin-top:10px;">
+        <button class="play-btn" onclick="play()" style="flex:2;">▶ PLAY</button>
+        <button class="stop-btn" onclick="stop()" style="flex:1;">■ STOP</button>
+    </div>
+</div>
+
+<script>
+    const NOTES = {
+        'C,': 130.81, 'D,': 146.83, 'E,': 164.81, 'F,': 174.61, 'G,': 196, 'A,': 220, 'B,': 246.94,
+        'C': 261.63, 'D': 293.66, 'E': 329.63, 'F': 349.23, 'G': 392, 'A': 440, 'B': 493.88,
+        'c': 523.25, 'd': 587.33, 'e': 659.25, 'f': 698.46, 'g': 783.99, 'a': 880, 'b': 987.77,
+        "c'": 1046.50, "d'": 1174.66, "e'": 1318.51, "f'": 1396.91, "g'": 1567.98, "a'": 1760, "b'": 1975.53,
+        'z': 0
+    };
+
+    // Priority order for model selection (best for sheet music transcription)
+    const MODEL_PRIORITY = [
+        'gemini-1.5-pro',      // Best accuracy, handles complex notation
+        'gemini-1.5-flash',    // Fast, good accuracy, free tier
+        'gemini-1.0-pro-vision', // Fallback older model
+        'gemini-pro-vision'    // Last resort
+    ];
+
+    let audioCtx = null;
+    let masterGain = null;
+    let isPlaying = false;
+    let sources = [];
+    let currentModel = null;
+
+    function log(msg, err) {
+        const m = document.getElementById('console-monitor');
+        const line = document.createElement('div');
+        line.textContent = '> ' + msg;
+        if (err) line.style.color = '#ff3333';
+        m.appendChild(line);
+        m.scrollTop = m.scrollHeight;
+    }
+
+    // CRITICAL: Initialize audio with user interaction
+    async function initAudio() {
+        if (audioCtx) {
+            if (audioCtx.state === 'suspended') await audioCtx.resume();
+            return true;
+        }
+        
+        try {
+            const AudioContext = window.AudioContext || window.webkitAudioContext;
+            audioCtx = new AudioContext();
+            
+            // Create master gain with higher initial volume
+            masterGain = audioCtx.createGain();
+            masterGain.gain.value = 0.9; // Higher default volume
+            
+            // Connect to destination
+            masterGain.connect(audioCtx.destination);
+            
+            // Resume if suspended (mobile requirement)
+            if (audioCtx.state === 'suspended') {
+                await audioCtx.resume();
+            }
+            
+            // Hide audio test warning
+            document.getElementById('audio-test').style.display = 'none';
+            
+            initKeys();
+            log("AUDIO ENGINE READY");
+            return true;
+        } catch(e) {
+            log("AUDIO INIT FAILED: " + e.message, true);
+            document.getElementById('audio-test').style.display = 'block';
+            return false;
+        }
+    }
+
+    function unlockAudio() {
+        initAudio().then(success => {
+            if (success) {
+                // Play test beep
+                const osc = audioCtx.createOscillator();
+                const g = audioCtx.createGain();
+                g.gain.value = 0.3;
+                osc.connect(g).connect(masterGain);
+                osc.frequency.value = 880;
+                osc.start();
+                osc.stop(audioCtx.currentTime + 0.1);
+                log("AUDIO UNLOCKED - TEST BEEP PLAYED");
+            }
+        });
+    }
+
+    function initKeys() {
+        const c = document.getElementById('piano-keys');
+        c.innerHTML = '';
+        Object.keys(NOTES).filter(n => NOTES[n] > 0).reverse().forEach(note => {
+            const k = document.createElement('div');
+            k.className = 'piano-key ' + (note.includes('#') ? 'black' : 'white');
+            k.id = 'key-' + note.replace(/[',]/g, '_');
+            k.style.height = '20px';
+            if (!note.includes('#')) k.textContent = note;
+            c.appendChild(k);
+        });
+    }
+
+    // AUTO-SELECT best available model
+    async function autoSelectModel(key) {
+        log("AUTO-DETECTING BEST MODEL...");
+        
+        try {
+            const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${key}&pageSize=100`);
+            
+            if (!response.ok) {
+                const err = await response.json();
+                throw new Error(err.error?.message || 'API Error');
+            }
+
+            const data = await response.json();
+            
+            if (!data.models || data.models.length === 0) {
+                throw new Error("No models available");
+            }
+
+            // Get list of available model names
+            const availableModels = data.models.map(m => m.name.replace('models/', ''));
+            log("AVAILABLE: " + availableModels.filter(m => m.includes('gemini')).join(', '));
+
+            // Find best model based on priority list
+            let selected = null;
+            for (const priorityModel of MODEL_PRIORITY) {
+                // Check for exact match or versioned match (e.g., gemini-1.5-flash-001)
+                const match = availableModels.find(m => m === priorityModel || m.startsWith(priorityModel + '-'));
+                if (match) {
+                    selected = match;
+                    break;
+                }
+            }
+
+            // Fallback to any gemini model with generateContent
+            if (!selected) {
+                const fallback = data.models.find(m => 
+                    m.name.includes('gemini') && 
+                    m.supportedGenerationMethods?.includes('generateContent')
+                );
+                if (fallback) selected = fallback.name.replace('models/', '');
+            }
+
+            if (selected) {
+                currentModel = selected;
+                document.getElementById('model-status').textContent = selected;
+                document.getElementById('model-status').style.color = '#00ff41';
+                log("SELECTED: " + selected);
+                return selected;
+            } else {
+                throw new Error("No suitable Gemini model found");
+            }
+
+        } catch (e) {
+            log("MODEL DETECTION FAILED: " + e.message, true);
+            // Hardcoded fallback
+            currentModel = 'gemini-1.5-flash';
+            document.getElementById('model-status').textContent = 'FALLBACK';
+            return currentModel;
+        }
+    }
+
+    async function transcribe() {
+        const key = document.getElementById('api-key').value.trim();
+        const file = document.getElementById('file-input').files[0];
+        const btn = document.getElementById('transcribe-btn');
+        
+        if (!key) {
+            log("ERROR: Enter API key", true);
+            return;
+        }
+        if (!file) {
+            log("ERROR: Select image file", true);
+            return;
+        }
+
+        btn.disabled = true;
+        
+        // Auto-select model if not already done
+        if (!currentModel) {
+            await autoSelectModel(key);
+        }
+
+        log("TRANSCRIBING WITH " + currentModel + "...");
+
+        const reader = new FileReader();
+        reader.onload = async () => {
+            try {
+                const base64 = reader.result.split(',')[1];
+                const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${currentModel}:generateContent?key=${key}`;
+                
+                const response = await fetch(endpoint, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        contents: [{
+                            parts: [
+                                {
+                                    text: `Analyze this sheet music image and convert to ABC notation.
+                                    
+Output ONLY valid ABC notation. Format:
+X:1
+T:Title
+M:4/4
+L:1/8
+Q:120
+K:C
+[notes using C D E F G A B for middle, c d e f g a b for high, C, D, E, F, G, A, B, for low]
+[chords like CEG], rests z, bar lines |`
+                                },
+                                {
+                                    inline_data: {
+                                        mime_type: file.type,
+                                        data: base64
+                                    }
+                                }
+                            ]
+                        }]
+                    })
+                });
+
+                if (!response.ok) {
+                    const err = await response.json();
+                    // If model fails, try to auto-select again
+                    if (response.status === 404 || response.status === 400) {
+                        log("MODEL FAILED, RETRYING WITH AUTO-SELECT...");
+                        currentModel = null;
+                        await autoSelectModel(key);
+                        btn.disabled = false;
+                        transcribe();
+                        return;
+                    }
+                    throw new Error(`${response.status}: ${err.error?.message}`);
+                }
+
+                const data = await response.json();
+                
+                if (!data.candidates?.[0]?.content?.parts?.[0]?.text) {
+                    throw new Error("Empty response from AI");
+                }
+
+                let abc = data.candidates[0].content.parts[0].text;
+                abc = abc.replace(/```[a-z]*\n?/gi, '').replace(/```/g, '').trim();
+                
+                document.getElementById('abc-input').value = abc;
+                log("TRANSCRIPTION SUCCESS!");
+                render();
+
+            } catch (e) {
+                log("ERROR: " + e.message, true);
+            }
+            btn.disabled = false;
+        };
+        reader.readAsDataURL(file);
+    }
+
+    function loadDemo() {
+        const demo = `X:1
+T:Demo
+M:4/4
+L:1/4
+Q:120
+K:C
+E G c G | F A c A | G B d B | c2 z2 |]`;
+        document.getElementById('abc-input').value = demo;
+        log("DEMO LOADED - TAP PLAY");
+        render();
+        
+        // Auto-init audio on demo load
+        if (!audioCtx) unlockAudio();
+    }
+
+    function parseABC(abc) {
+        const events = [];
+        const lines = abc.split('\n');
+        let len = 1/4, tempo = 120;
+        
+        lines.forEach(line => {
+            if (line.startsWith('L:')) {
+                const m = line.match(/L:(\d+)\/(\d+)/);
+                if (m) len = parseInt(m[1]) / parseInt(m[2]);
+            }
+            if (line.startsWith('Q:')) {
+                const m = line.match(/Q:(\d+)/);
+                if (m) tempo = parseInt(m[1]);
+            }
+        });
+
+        const body = lines.filter(l => !l.match(/^[A-Za-z]:/) && l.trim()).join(' ');
+        const toks = body.match(/(\[[^\]]*\]|[a-gA-G][,']*|z|\|)/g) || [];
+        let time = 0;
+
+        toks.forEach(t => {
+            if (t === '|' || !t.trim()) return;
+            if (t.startsWith('[')) {
+                const notes = t.slice(1,-1).match(/[a-gA-G][,']*/g) || [];
+                const n = notes.filter(x => NOTES[x] > 0).map(x => ({note: x, freq: NOTES[x]}));
+                if (n.length) {
+                    events.push({type: 'chord', notes: n, time, len});
+                    time += len;
+                }
+            } else if (t === 'z') {
+                time += len;
+            } else if (NOTES[t] > 0) {
+                events.push({type: 'note', note: t, freq: NOTES[t], time, len});
+                time += len;
+            }
+        });
+
+        return {events, total: time, tempo};
+    }
+
+    function render() {
+        const abc = document.getElementById('abc-input').value;
+        if (!abc.trim()) return;
+        
+        const p = parseABC(abc);
+        const grid = document.getElementById('note-grid');
+        const ruler = document.getElementById('time-ruler');
+        
+        grid.innerHTML = '<div class="playhead" id="playhead"></div>';
+        ruler.innerHTML = '';
+        
+        const w = Math.max(800, p.total * 100 + 200);
+        grid.style.width = w + 'px';
+        
+        const beat = 60 / p.tempo;
+        for (let i = 0; i <= p.total / beat; i++) {
+            const m = document.createElement('div');
+            m.className = 'beat-marker';
+            m.style.left = (i * beat * 100) + 'px';
+            m.textContent = (i % 4 + 1);
+            ruler.appendChild(m);
+        }
+
+        const all = Object.keys(NOTES).filter(n => NOTES[n] > 0).reverse();
+        p.events.forEach(ev => {
+            if (ev.type === 'rest') return;
+            const notes = ev.type === 'chord' ? ev.notes : [ev];
+            notes.forEach(n => {
+                const idx = all.indexOf(n.note);
+                if (idx < 0) return;
+                const el = document.createElement('div');
+                el.className = 'note-block';
+                el.style.left = (ev.time * 100) + 'px';
+                el.style.width = Math.max(5, ev.len * 100 - 2) + 'px';
+                el.style.top = (idx * 20 + 1) + 'px';
+                el.style.height = '18px';
+                if (ev.type === 'chord') el.style.background = 'var(--warm)';
+                el.dataset.note = n.note;
+                el.dataset.t = ev.time;
+                el.dataset.d = ev.len;
+                grid.appendChild(el);
+            });
+        });
+
+        log("RENDERED: " + p.events.length + " events");
+    }
+
+    async function play() {
+        // CRITICAL: Ensure audio is initialized
+        const audioReady = await initAudio();
+        if (!audioReady) {
+            log("AUDIO NOT AVAILABLE - TAP ENABLE AUDIO", true);
+            document.getElementById('audio-test').style.display = 'block';
+            return;
+        }
+
+        // Ensure context is running
+        if (audioCtx.state === 'suspended') {
+            await audioCtx.resume();
+        }
+
+        const abc = document.getElementById('abc-input').value;
+        if (!abc.trim()) {
+            log("NO MUSIC - LOAD DEMO FIRST", true);
+            return;
+        }
+
+        stop();
+        const p = parseABC(abc);
+        if (!p.events.length) {
+            log("NO NOTES FOUND", true);
+            return;
+        }
+
+        const mult = 60 / p.tempo / (parseFloat(document.getElementById('tempo').value) || 1);
+        const vol = (parseFloat(document.getElementById('vol').value) || 90) / 100;
+        const wave = document.getElementById('wave-type').value;
+        const start = audioCtx.currentTime + 0.1;
+        isPlaying = true;
+
+        log(`PLAYING: ${p.events.length} events, VOL: ${Math.round(vol*100)}%`);
+
+        p.events.forEach(ev => {
+            if (ev.type === 'rest') return;
+            const notes = ev.type === 'chord' ? ev.notes : [ev];
+            const t = start + (ev.time * mult);
+            const dur = ev.len * mult;
+
+            notes.forEach(n => {
+                if (!n.freq) return;
+                
+                const osc = audioCtx.createOscillator();
+                const g = audioCtx.createGain();
+                
+                osc.type = wave;
+                osc.frequency.value = n.freq;
+                
+                // HIGHER VOLUME: 0.4 per voice with proper envelope
+                const sus = (0.4 * vol) / Math.sqrt(notes.length);
+                
+                // Attack
+                g.gain.setValueAtTime(0, t);
+                g.gain.linearRampToValueAtTime(sus, t + 0.01);
+                // Sustain
+                g.gain.setValueAtTime(sus, t + dur - 0.05);
+                // Release
+                g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+
+                // Connect
+                osc.connect(g);
+                g.connect(masterGain);
+                
+                // Start/stop
+                osc.start(t);
+                osc.stop(t + dur + 0.1);
+                
+                sources.push(osc, g);
+            });
+        });
+
+        animate(start, mult, p.total);
+    }
+
+    function animate(start, mult, total) {
+        const playhead = document.getElementById('playhead');
+        const scroll = document.getElementById('piano-scroll');
+        
+        function frame() {
+            if (!isPlaying) return;
+            const elapsed = audioCtx.currentTime - start;
+            
+            if (elapsed < total * mult) {
+                const x = (elapsed / mult) * 100;
+                playhead.style.display = 'block';
+                playhead.style.left = x + 'px';
+                
+                document.querySelectorAll('.note-block').forEach(el => {
+                    const et = parseFloat(el.dataset.t);
+                    const ed = parseFloat(el.dataset.d);
+                    const on = elapsed >= et * mult && elapsed < (et + ed) * mult;
+                    el.classList.toggle('playing', on);
+                    if (on) {
+                        const k = document.getElementById('key-' + el.dataset.note.replace(/[',]/g, '_'));
+                        if (k) k.classList.add('active');
+                    }
+                });
+                
+                if (x > scroll.scrollLeft + scroll.clientWidth - 200) {
+                    scroll.scrollLeft = x - 150;
+                }
+                
+                requestAnimationFrame(frame);
+            } else {
+                stop();
+            }
+        }
+        requestAnimationFrame(frame);
+    }
+
+    function stop() {
+        isPlaying = false;
+        const now = audioCtx ? audioCtx.currentTime : 0;
+        
+        sources.forEach(s => {
+            try {
+                if (s.gain) {
+                    s.gain.cancelScheduledValues(now);
+                    s.gain.setValueAtTime(s.gain.value || 0, now);
+                    s.gain.exponentialRampToValueAtTime(0.001, now + 0.03);
+                }
+                if (s.stop) s.stop(now + 0.05);
+            } catch(e) {}
+        });
+        
+        setTimeout(() => {
+            sources.forEach(s => { try { s.disconnect(); } catch(e) {} });
+            sources = [];
+        }, 100);
+        
+        document.querySelectorAll('.playing').forEach(el => el.classList.remove('playing'));
+        document.querySelectorAll('.piano-key.active').forEach(el => el.classList.remove('active'));
+        document.getElementById('playhead').style.display = 'none';
+    }
+
+    function download(ext) {
+        const val = document.getElementById('abc-input').value;
+        if (!val) { log("BUFFER EMPTY", true); return; }
+        const blob = new Blob([val], {type: 'text/plain'});
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `music_${Date.now()}.${ext}`;
+        a.click();
+        URL.revokeObjectURL(url);
+        log(`SAVED .${ext.toUpperCase()}`);
+    }
+
+    // Check for audio lock on load
+    window.addEventListener('load', () => {
+        initKeys();
+        // Check if audio is locked
+        setTimeout(() => {
+            if (!audioCtx || audioCtx.state === 'suspended') {
+                document.getElementById('audio-test').style.display = 'block';
+                log("AUDIO LOCKED - TAP ENABLE AUDIO OR PLAY");
+            }
+        }, 500);
+    });
+
+    // Auto-unlock on any button press
+    document.addEventListener('click', async (e) => {
+        if (e.target.tagName === 'BUTTON' && !audioCtx) {
+            await initAudio();
+        }
+    }, {once: true});
+</script>
+</body>
+  </html>
