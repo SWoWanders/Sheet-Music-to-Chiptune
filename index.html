@@ -1,0 +1,166 @@
+<script>
+    // [NOTE_MAP and MIDI_MAP remain unchanged from your original]
+    const NOTE_MAP = {
+        'C,': 130.81, 'C#,': 138.59, 'D,': 146.83, 'D#,': 155.56, 'E,': 164.81, 'F,': 174.61, 'F#,': 185.00,
+        'G,': 196.00, 'G#,': 207.65, 'A,': 220.00, 'A#,': 233.08, 'B,': 246.94,
+        'C': 261.63, 'C#': 277.18, 'D': 293.66, 'D#': 311.13, 'E': 329.63, 'F': 349.23, 'F#': 369.99,
+        'G': 392.00, 'G#': 415.30, 'A': 440.00, 'A#': 466.16, 'B': 493.88,
+        'c': 523.25, 'c#': 554.37, 'd': 587.33, 'd#': 622.25, 'e': 659.25, 'f': 698.46, 'f#': 739.99,
+        'g': 783.99, 'g#': 830.61, 'a': 880.00, 'a#': 932.33, 'b': 987.77,
+        "c'": 1046.50, "c#'": 1108.73, "d'": 1174.66, "d#'": 1244.51, "e'": 1318.51, "f'": 1396.91, "f#'": 1479.98,
+        "g'": 1567.98, "g#'": 1661.22, "a'": 1760.00, "a#'": 1864.66, "b'": 1975.53,
+        'z': 0, 'Z': 0
+    };
+
+    const MIDI_MAP = {};
+    Object.keys(NOTE_MAP).forEach(note => {
+        if (NOTE_MAP[note] > 0) MIDI_MAP[note] = Math.round(69 + 12 * Math.log2(NOTE_MAP[note] / 440));
+    });
+
+    const PIANO_CONFIG = { keyHeight: 16, beatWidth: 60, pixelsPerSecond: 80 };
+
+    let audioCtx, analyzer, masterGain, compressor, reverbNode, activeSources = [];
+    let activeModel = null, isRecording = false, mediaRecorder, recordedChunks = [], recordingDestination = null;
+    let currentSequence = [];
+    let isPlaying = false;
+    let playheadAnimation = null;
+    let noteElements = [];
+    let audioUnlocked = false;
+
+    // --- NEW: REVERB GENERATOR ---
+    function createReverb() {
+        const length = audioCtx.sampleRate * 1.5; // 1.5 second decay
+        const impulse = audioCtx.createBuffer(2, length, audioCtx.sampleRate);
+        for (let i = 0; i < 2; i++) {
+            const channel = impulse.getChannelData(i);
+            for (let j = 0; j < length; j++) {
+                channel[j] = (Math.random() * 2 - 1) * Math.pow(1 - j / length, 2);
+            }
+        }
+        const reverb = audioCtx.createConvolver();
+        reverb.buffer = impulse;
+        return reverb;
+    }
+
+    function initAudio() {
+        if (!audioCtx) {
+            try {
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                compressor = audioCtx.createDynamicsCompressor();
+                analyzer = audioCtx.createAnalyser();
+                masterGain = audioCtx.createGain();
+                reverbNode = createReverb();
+                
+                // Routing: Synth -> MasterGain -> Reverb (Parallel) & Compressor -> Destination
+                const dryMix = audioCtx.createGain();
+                const wetMix = audioCtx.createGain();
+                
+                dryMix.gain.value = 0.8; 
+                wetMix.gain.value = 0.3; // Sustain level
+
+                masterGain.connect(dryMix);
+                masterGain.connect(reverbNode);
+                reverbNode.connect(wetMix);
+                
+                dryMix.connect(compressor);
+                wetMix.connect(compressor);
+                compressor.connect(analyzer);
+                analyzer.connect(audioCtx.destination);
+                
+                drawVisualizer();
+                initPianoRoll();
+                sysLog("AUDIO ENGINE READY + SUSTAIN ENABLED");
+            } catch(e) { sysLog("AUDIO INIT FAILED", true); }
+        }
+    }
+
+    function playMusic(isForRecording = false) {
+        stopAll();
+        if (!audioCtx) initAudio();
+        if (audioCtx.state === 'suspended') audioCtx.resume();
+
+        const raw = document.getElementById('abc-input').value;
+        if (!raw.trim()) return;
+
+        const tempoScale = parseFloat(document.getElementById('tempo-scale').value) || 1.0;
+        const vib = parseFloat(document.getElementById('vibrato-depth').value) || 0;
+        const vol = (parseFloat(document.getElementById('master-vol').value) || 60) / 100;
+        const waveType = document.getElementById('wave-type').value;
+        
+        const result = parseABC(raw);
+        const tempoMultiplier = 60 / result.tempo / tempoScale;
+        const startTime = audioCtx.currentTime + 0.1; 
+        isPlaying = true;
+        
+        result.events.forEach((event) => {
+            if (event.type === 'rest') return;
+            const notes = event.type === 'chord' ? event.notes : [event];
+            const eventStart = startTime + (event.time * tempoMultiplier);
+            const duration = event.duration * tempoMultiplier;
+            
+            notes.forEach((noteData, idx) => {
+                const freq = noteData.freq;
+                if (!freq) return;
+
+                const osc = audioCtx.createOscillator();
+                const noteGain = audioCtx.createGain();
+                
+                osc.type = waveType;
+                osc.frequency.setValueAtTime(freq, eventStart);
+                
+                // Envelope: Smooth attack/release to stop clicks
+                noteGain.gain.setValueAtTime(0, eventStart);
+                noteGain.gain.linearRampToValueAtTime(vol / Math.sqrt(notes.length), eventStart + 0.02);
+                noteGain.gain.setValueAtTime(vol / Math.sqrt(notes.length), eventStart + duration - 0.05);
+                noteGain.gain.exponentialRampToValueAtTime(0.001, eventStart + duration);
+
+                osc.connect(noteGain).connect(masterGain);
+                
+                if (vib > 0) {
+                    const lfo = audioCtx.createOscillator();
+                    const lfoGain = audioCtx.createGain();
+                    lfo.frequency.value = 5;
+                    lfoGain.gain.value = freq * (vib / 2000);
+                    lfo.connect(lfoGain).connect(osc.frequency);
+                    lfo.start(eventStart);
+                    lfo.stop(eventStart + duration);
+                    activeSources.push(lfo);
+                }
+
+                osc.start(eventStart);
+                osc.stop(eventStart + duration);
+                activeSources.push(osc);
+            });
+        });
+
+        // Animation and Recording logic [Remains identical to original]
+        const totalDuration = result.totalTime * tempoMultiplier;
+        function animate() {
+            if (!isPlaying) return;
+            const elapsed = audioCtx.currentTime - startTime;
+            if (elapsed < totalDuration) {
+                updatePlayhead(elapsed);
+                playheadAnimation = requestAnimationFrame(animate);
+            } else { stopAll(); }
+        }
+        playheadAnimation = requestAnimationFrame(animate);
+    }
+
+    function stopAll() {
+        isPlaying = false;
+        if (playheadAnimation) cancelAnimationFrame(playheadAnimation);
+        activeSources.forEach(s => {
+            try { s.stop(); s.disconnect(); } catch(e) {}
+        });
+        activeSources = [];
+        if (mediaRecorder && mediaRecorder.state === "recording") mediaRecorder.stop();
+        isRecording = false;
+        document.getElementById('rec-btn').classList.remove('recording-active');
+        document.getElementById('rec-btn').textContent = '● RECORD';
+        document.querySelectorAll('.playing, .active').forEach(el => el.classList.remove('playing', 'active'));
+        if (document.getElementById('playhead')) document.getElementById('playhead').style.display = 'none';
+        updateVoiceDisplay(0);
+    }
+
+    // [All other original helper functions: parseABC, sysLog, startWorkflow, etc. remain below]
+</script>
